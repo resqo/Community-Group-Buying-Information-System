@@ -1,0 +1,16 @@
+package com.example.community_group_buy_backend.service;
+
+import java.util.List;
+
+import com.example.community_group_buy_backend.entity.User;
+import com.example.community_group_buy_backend.vo.UserVO;
+
+public interface UserService {
+    List<UserVO> list();
+
+    UserVO get(Long userId);
+
+    UserVO update(User user);
+
+    void updateStatus(Long userId, Integer status);
+}
