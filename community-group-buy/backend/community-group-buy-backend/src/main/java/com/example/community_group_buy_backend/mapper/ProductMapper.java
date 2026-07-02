@@ -74,4 +74,23 @@ public interface ProductMapper {
 
     @Delete("delete from product where product_id=#{productId}")
     int delete(Long productId);
+
+    @Select("""
+            SELECT p.*, u.shop_name merchant_name, u.avatar_url merchant_avatar, c.category_name
+            FROM product p
+            LEFT JOIN user u ON p.merchant_id = u.user_id
+            LEFT JOIN category c ON p.category_id = c.category_id
+            WHERE p.audit_status = 1 AND p.status = 1 AND p.stock > 0
+            ORDER BY p.sales_count DESC
+            LIMIT #{limit}
+            """)
+    List<ProductVO> findPopularProducts(@Param("limit") int limit);
+
+    @Select("""
+            SELECT p.product_id, p.product_name, p.stock, p.sales_count
+            FROM product p
+            WHERE p.merchant_id = #{merchantId}
+            ORDER BY p.sales_count DESC
+            """)
+    List<Map<String, Object>> productInventoryStats(Long merchantId);
 }

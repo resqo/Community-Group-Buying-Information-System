@@ -119,4 +119,51 @@ public interface OrderMapper {
             order by p.pay_time desc
             """)
     List<Map<String, Object>> findPayments();
+
+    @Select("""
+            SELECT DISTINCT o.user_id, o.product_id
+            FROM orders o
+            WHERE o.order_status <> 7
+            ORDER BY o.user_id
+            """)
+    List<Map<String, Object>> findAllPurchases();
+
+    @Select("""
+            SELECT DISTINCT product_id
+            FROM orders
+            WHERE user_id = #{userId}
+              AND order_status <> 7
+            """)
+    List<Long> findUserPurchasedProductIds(Long userId);
+
+    @Select("""
+            SELECT o.product_id, o.product_name, SUM(o.quantity) AS total_quantity,
+                   SUM(o.total_amount) AS total_amount
+            FROM orders o
+            WHERE o.order_status NOT IN (7, 8, 9)
+              AND (#{merchantId} IS NULL OR o.merchant_id = #{merchantId})
+            GROUP BY o.product_id, o.product_name
+            ORDER BY total_quantity DESC
+            """)
+    List<Map<String, Object>> productSalesStats(@Param("merchantId") Long merchantId);
+
+    @Select("""
+            SELECT o.user_id, u.username, SUM(o.total_amount) AS total_amount,
+                   COUNT(*) AS order_count
+            FROM orders o
+            LEFT JOIN user u ON o.user_id = u.user_id
+            WHERE o.order_status NOT IN (7, 8, 9) AND o.pay_status = 1
+            GROUP BY o.user_id, u.username
+            ORDER BY total_amount DESC
+            """)
+    List<Map<String, Object>> userPurchaseStats();
+
+    @Select("""
+            SELECT COALESCE(SUM(o.total_amount), 0) AS total_revenue,
+                   COUNT(*) AS order_count,
+                   COUNT(DISTINCT o.user_id) AS user_count
+            FROM orders o
+            WHERE o.order_status NOT IN (7, 8, 9) AND o.pay_status = 1
+            """)
+    Map<String, Object> revenueOverview();
 }

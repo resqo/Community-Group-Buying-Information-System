@@ -1,9 +1,10 @@
 <script setup>
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { api } from '../../api/request'
 import { notify } from '../../utils/notify'
 import { clearSession } from '../../utils/session'
+import * as echarts from 'echarts'
 
 const router = useRouter()
 const route = useRoute()
@@ -16,6 +17,11 @@ const activeTab = ref(typeof route.query.tab === 'string' ? route.query.tab : 'o
 const products = ref([])
 const categories = ref([])
 const orders = ref([])
+const analyticsData = ref(null)
+const suggestions = ref([])
+const suggestionsLoading = ref(false)
+let analyticsTimer = null
+let chartInstances = []
 
 const productDialog = reactive({ visible: false, editingId: null })
 const productForm = reactive({
@@ -128,11 +134,101 @@ function logout() {
   router.push('/login')
 }
 
-onMounted(loadAll)
+async function loadAnalytics() {
+  analyticsData.value = await api.merchantAnalyticsSales(merchantId)
+  await nextTick()
+  initCharts()
+}
 
-watch(activeTab, (value) => {
-  router.replace({ query: { ...route.query, tab: value } })
+async function loadSuggestions() {
+  suggestionsLoading.value = true
+  try {
+    suggestions.value = await api.merchantAnalyticsSuggestions(merchantId)
+  } finally {
+    suggestionsLoading.value = false
+  }
+}
+
+function initCharts() {
+  disposeCharts()
+  if (activeTab.value !== 'dashboard') return
+
+  const salesStats = analyticsData.value?.salesStats || []
+
+  // Chart 1: Sales Quantity
+  const qtyBox = document.getElementById('merchant-quantity-chart')
+  if (qtyBox && salesStats.length) {
+    const c1 = echarts.init(qtyBox)
+    c1.setOption({
+      tooltip: { trigger: 'axis' },
+      grid: { left: '3%', right: '8%', bottom: '10%', top: '8%', containLabel: true },
+      xAxis: { type: 'category', data: salesStats.map(r => r.product_name), axisLabel: { rotate: 25, fontSize: 11 } },
+      yAxis: { type: 'value', name: '销售量' },
+      series: [{ type: 'bar', data: salesStats.map(r => r.total_quantity), itemStyle: { color: '#0f766e', borderRadius: [4, 4, 0, 0] }, barMaxWidth: 50 }]
+    })
+    chartInstances.push(c1)
+  }
+
+  // Chart 2: Sales Amount
+  const amtBox = document.getElementById('merchant-amount-chart')
+  if (amtBox && salesStats.length) {
+    const c2 = echarts.init(amtBox)
+    c2.setOption({
+      tooltip: { trigger: 'axis' },
+      grid: { left: '3%', right: '8%', bottom: '10%', top: '8%', containLabel: true },
+      xAxis: { type: 'category', data: salesStats.map(r => r.product_name), axisLabel: { rotate: 25, fontSize: 11 } },
+      yAxis: { type: 'value', name: '销售额（元）' },
+      series: [{ type: 'bar', data: salesStats.map(r => (Number(r.total_amount) || 0).toFixed(2)), itemStyle: { color: '#f97316', borderRadius: [4, 4, 0, 0] }, barMaxWidth: 50 }]
+    })
+    chartInstances.push(c2)
+  }
+}
+
+function disposeCharts() {
+  chartInstances.forEach(c => c.dispose())
+  chartInstances = []
+}
+
+function startAnalyticsTimer() {
+  stopAnalyticsTimer()
+  analyticsTimer = setInterval(async () => {
+    if (activeTab.value === 'dashboard') {
+      await loadAnalytics()
+      await loadSuggestions()
+    }
+  }, 30000)
+}
+
+function stopAnalyticsTimer() {
+  if (analyticsTimer) { clearInterval(analyticsTimer); analyticsTimer = null }
+}
+
+onMounted(async () => {
+  await loadAll()
+  if (activeTab.value === 'dashboard') {
+    await loadAnalytics()
+    await loadSuggestions()
+  }
+  startAnalyticsTimer()
 })
+
+onUnmounted(() => {
+  disposeCharts()
+  stopAnalyticsTimer()
+})
+
+watch(activeTab, async (value) => {
+  router.replace({ query: { ...route.query, tab: value } })
+  if (value === 'dashboard') {
+    await nextTick()
+    if (!analyticsData.value) await loadAnalytics()
+    else initCharts()
+    if (!suggestions.value.length) await loadSuggestions()
+  } else {
+    disposeCharts()
+  }
+})
+
 </script>
 
 <template>
@@ -145,6 +241,7 @@ watch(activeTab, (value) => {
         </div>
       </div>
       <div class="topbar-actions">
+        <button type="button" class="dashboard-header-btn" @click="activeTab = 'dashboard'">数据大屏</button>
         <el-button type="primary" @click="openCreate">新增商品</el-button>
         <el-button @click="logout">退出</el-button>
       </div>
@@ -159,6 +256,39 @@ watch(activeTab, (value) => {
     </section>
 
     <el-tabs v-model="activeTab" class="workspace stretch-tabs">
+      <el-tab-pane label="数据大屏" name="dashboard">
+        <div v-if="activeTab === 'dashboard'" class="dashboard-shell">
+          <div class="dashboard-stats">
+            <div class="dashboard-stat-card accent"><span class="stat-label">总销售额</span><span class="stat-value">¥{{ money(analyticsData?.totalRevenue || 0) }}</span></div>
+            <div class="dashboard-stat-card"><span class="stat-label">总销量</span><span class="stat-value">{{ analyticsData?.totalQuantity || 0 }} 件</span></div>
+            <div class="dashboard-stat-card"><span class="stat-label">商品种类</span><span class="stat-value">{{ analyticsData?.salesStats?.length || 0 }}</span></div>
+            <div class="dashboard-stat-card"><span class="stat-label">库存总量</span><span class="stat-value">{{ stockTotal }}</span></div>
+          </div>
+
+          <div class="dashboard-charts">
+            <div class="dashboard-chart-panel">
+              <h3>商品销售量排行</h3>
+              <div id="merchant-quantity-chart" class="dashboard-chart-box"></div>
+            </div>
+            <div class="dashboard-chart-panel">
+              <h3>商品销售额排行</h3>
+              <div id="merchant-amount-chart" class="dashboard-chart-box"></div>
+            </div>
+          </div>
+
+          <div class="dashboard-suggestions">
+            <h3>智能经营建议</h3>
+            <div v-if="suggestionsLoading" style="color: var(--muted)">正在分析经营数据...</div>
+            <div v-else class="suggestion-list">
+              <div v-for="(s, idx) in suggestions" :key="idx" :class="['suggestion-item', `sug-${idx + 1}`]">
+                <span class="sug-idx">{{ idx + 1 }}</span>
+                <span>{{ s }}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </el-tab-pane>
+
       <el-tab-pane label="经营概览" name="overview">
         <div class="merchant-overview">
           <section class="mini-panel">

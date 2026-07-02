@@ -57,11 +57,11 @@ public class GroupBuyServiceImpl implements GroupBuyService {
         GroupBuy group = new GroupBuy();
         group.setActivityId(activityId);
         group.setLeaderUserId(userId);
-        group.setCurrentCount(0);
+        group.setCurrentCount(1);
         group.setRequiredCount(activity.getGroupSize());
         group.setStatus(0);
         LocalDateTime expireTime = activity.getEndTime();
-        if (expireTime == null || expireTime.isAfter(LocalDateTime.now().plusHours(24))) {
+        if (expireTime == null || expireTime.isBefore(LocalDateTime.now()) || expireTime.isAfter(LocalDateTime.now().plusHours(24))) {
             expireTime = LocalDateTime.now().plusHours(24);
         }
         group.setExpireTime(expireTime);
@@ -92,7 +92,17 @@ public class GroupBuyServiceImpl implements GroupBuyService {
     @Override
     public List<Map<String, Object>> openGroups(Long userId) {
         mapper.cancelEmptyGroups();
-        return mapper.findOpenGroups(userId);
+        List<Map<String, Object>> groups = mapper.findOpenGroups(userId);
+        List<Map<String, Object>> activities = mapper.findOpenActivities();
+        if (activities != null) {
+            groups.addAll(activities);
+        }
+        groups.sort((a, b) -> {
+            String ta = String.valueOf(a.getOrDefault("create_time", ""));
+            String tb = String.valueOf(b.getOrDefault("create_time", ""));
+            return tb.compareTo(ta);
+        });
+        return groups;
     }
 
     @Override

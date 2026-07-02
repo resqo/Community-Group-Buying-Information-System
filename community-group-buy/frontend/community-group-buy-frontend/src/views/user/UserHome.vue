@@ -29,6 +29,8 @@ const categoryId = ref()
 const activeTab = ref(typeof route.query.tab === 'string' ? route.query.tab : 'market')
 const hiddenGroupIds = ref([])
 const hiddenGroupOrderIds = ref([])
+const recommendations = ref([])
+const recommendationsLoading = ref(false)
 
 const checkout = reactive({
   visible: false,
@@ -78,7 +80,7 @@ const pendingPayOrders = computed(() => orders.value.filter((order) => order.pay
 const pickupOrders = computed(() => orders.value.filter((order) => order.pickupStatus === 1 || order.orderStatus === 5))
 const displayOrders = computed(() => orders.value.filter((order) => order.orderStatus !== 7))
 const cartTotal = computed(() => cart.value.reduce((sum, item) => sum + Number(item.singlePrice || 0) * Number(item.quantity || 1), 0))
-const liveGroupCount = computed(() => openGroups.value.length + activities.value.length)
+const liveGroupCount = computed(() => openGroups.value.length)
 const featuredProducts = computed(() => products.value.slice(0, 5))
 const freeGroupCount = computed(() => userProfile.value.freeGroupCount ?? 0)
 const rawGroupOrders = computed(() => orders.value.filter((order) => order.orderType === 'GROUP' || order.orderType === 'FREE_GROUP'))
@@ -146,6 +148,15 @@ async function loadAll() {
   }
 }
 
+async function loadRecommendations() {
+  recommendationsLoading.value = true
+  try {
+    recommendations.value = await api.recommendations(userId)
+  } finally {
+    recommendationsLoading.value = false
+  }
+}
+
 function openCheckout(product, orderType = 'SINGLE', groupId = null, quantity = 1) {
   if (orderType === 'FREE_GROUP' && freeGroupCount.value <= 0) {
     notify.warning('免拼次数不足')
@@ -193,6 +204,20 @@ async function startGroup(product) {
   }
   const group = await api.startGroup(activity.activity_id || activity.activityId, userId)
   openCheckout(product, 'GROUP', group.groupId)
+}
+
+function isActivityItem(group) {
+  return Number(group.is_activity || group.isActivity) === 1
+}
+
+async function startFromActivity(item) {
+  const activityId = item.activity_id || item.activityId
+  const group = await api.startGroup(activityId, userId)
+  openCheckout({
+    productId: item.product_id || item.productId,
+    productName: item.product_name || item.productName,
+    groupPrice: item.group_price || item.groupPrice,
+  }, 'GROUP', group.groupId)
 }
 
 async function submitOrder() {
@@ -457,6 +482,7 @@ watch(activeTab, (value) => {
         <el-button type="primary" @click="loadAll">搜索</el-button>
       </div>
       <div class="market-actions">
+        <button type="button" @click="loadRecommendations(); activeTab = 'recommendations'"><span>猜你喜欢</span></button>
         <button type="button" @click="activeTab = 'pending'"><span>{{ pendingPayOrders.length }}</span>待支付</button>
         <button type="button" @click="activeTab = 'myGroups'"><span>{{ freeGroupCount }}</span>免拼次数</button>
         <button type="button" @click="activeTab = 'pickup'"><span>{{ pickupOrders.length }}</span>待自提</button>
@@ -548,22 +574,66 @@ watch(activeTab, (value) => {
         <el-empty v-if="!products.length" description="暂无匹配商品" />
       </el-tab-pane>
 
+      <el-tab-pane label="猜你喜欢" name="recommendations">
+        <div v-loading="recommendationsLoading">
+          <el-empty v-if="!recommendations.length && !recommendationsLoading" description="点击上方「猜你喜欢」按钮获取推荐" />
+          <div v-else class="product-grid market-product-grid">
+            <article v-for="rec in recommendations" :key="rec.productId" class="product-card market-product-card">
+              <div class="product-image-wrap">
+                <img :src="rec.mainImage || '/favicon.svg'" :alt="rec.productName" />
+                <span v-if="activityOf(rec)" class="deal-badge">拼团</span>
+              </div>
+              <div class="product-body">
+                <div class="recommend-reason">基于您购买的「{{ rec.basedOnProductName }}」推荐</div>
+                <div class="product-tags">
+                  <span>{{ rec.categoryName || '分类' }}</span>
+                  <span>{{ rec.merchantName || '社区商家' }}</span>
+                </div>
+                <h2>{{ rec.productName }}</h2>
+                <p>{{ rec.description || '社区优选商品' }}</p>
+                <div class="merchant-line">
+                  <el-avatar :size="24" :src="rec.merchantAvatar || undefined">{{ avatarText(rec.merchantName, '商') }}</el-avatar>
+                  <span>{{ rec.merchantName || '社区商家' }}</span>
+                </div>
+                <div class="price-row">
+                  <div>
+                    <strong>¥{{ money(rec.singlePrice) }}</strong>
+                    <small v-if="Number(rec.originalPrice) > Number(rec.singlePrice)">¥{{ money(rec.originalPrice) }}</small>
+                  </div>
+                  <em v-if="activityOf(rec)">团购 ¥{{ groupPrice(rec) }}</em>
+                </div>
+                <div class="stock-meter"><span :style="{ width: `${Math.min(100, Math.max(8, Number(rec.salesCount || 0) + 18))}%` }"></span></div>
+                <div class="meta-row"><span>库存 {{ rec.stock }}</span><span>销量 {{ rec.salesCount }}</span></div>
+                <div class="action-row">
+                  <el-button type="danger" @click="openCheckout(rec, 'SINGLE')">立即购买</el-button>
+                  <el-button @click="addCart(rec)">加入购物车</el-button>
+                  <el-button :disabled="!canFreeGroup(rec)" @click="openCheckout(rec, 'FREE_GROUP')">免拼</el-button>
+                  <el-button type="primary" plain @click="startGroup(rec)">开团</el-button>
+                </div>
+              </div>
+            </article>
+          </div>
+        </div>
+      </el-tab-pane>
+
       <el-tab-pane label="可参与拼团" name="groups">
         <div class="group-card-grid">
-          <article v-for="group in openGroups" :key="group.group_id || group.groupId" class="group-card">
+          <article v-for="group in openGroups" :key="group.group_id || group.groupId || group.activity_id || group.activityId" class="group-card">
             <img :src="group.main_image || group.mainImage || '/favicon.svg'" :alt="group.product_name || group.productName" />
             <div>
               <h3>{{ group.product_name || group.productName }}</h3>
-              <p>{{ groupNames(group) || '等待邻居加入' }}</p>
-              <div class="group-avatars">
+              <p v-if="isActivityItem(group)">管理员发起，快来开团</p>
+              <p v-else>{{ groupNames(group) || '等待邻居加入' }}</p>
+              <div class="group-avatars" v-if="!isActivityItem(group)">
                 <el-avatar v-for="avatar in groupAvatars(group).slice(0, 5)" :key="avatar" :size="34" :src="avatar || undefined">团</el-avatar>
               </div>
               <div class="group-progress">
-                <span>{{ group.current_count || group.currentCount }} / {{ group.required_count || group.requiredCount }} 人</span>
+                <span>{{ group.current_count || group.currentCount || 0 }} / {{ group.required_count || group.requiredCount }} 人</span>
                 <strong>¥{{ money(group.group_price || group.groupPrice) }}</strong>
               </div>
               <el-progress :percentage="Math.round(((group.current_count || group.currentCount || 0) / (group.required_count || group.requiredCount || 1)) * 100)" />
-              <el-button type="primary" @click="openCheckout({ productId: group.product_id || group.productId, productName: group.product_name || group.productName, groupPrice: group.group_price || group.groupPrice }, 'GROUP', group.group_id || group.groupId)">参团下单</el-button>
+              <el-button v-if="isActivityItem(group)" type="primary" @click="startFromActivity(group)">发起拼团</el-button>
+              <el-button v-else type="primary" @click="openCheckout({ productId: group.product_id || group.productId, productName: group.product_name || group.productName, groupPrice: group.group_price || group.groupPrice }, 'GROUP', group.group_id || group.groupId)">参团下单</el-button>
             </div>
           </article>
         </div>

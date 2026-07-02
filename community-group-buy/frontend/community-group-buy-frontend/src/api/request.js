@@ -80,6 +80,11 @@ export const api = {
   publishNotice: (data) => http.post('/admin/notices', data),
   userProfile: (userId) => http.get(`/users/${userId}`),
   updateUserProfile: (userId, data) => http.put(`/users/${userId}`, data),
+  recommendations: (userId) => http.get('/recommendations', { params: { userId } }),
+  merchantAnalyticsSales: (merchantId) => http.get('/merchant/analytics/sales', { params: { merchantId } }),
+  merchantAnalyticsSuggestions: (merchantId) => http.get('/merchant/analytics/suggestions', { params: { merchantId } }),
+  adminAnalyticsOverview: () => http.get('/admin/analytics/overview'),
+  adminAnalyticsSuggestions: () => http.get('/admin/analytics/suggestions'),
 }
 
 export default http

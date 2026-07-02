@@ -1,9 +1,10 @@
 <script setup>
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { api } from '../../api/request'
 import { notify } from '../../utils/notify'
 import { clearSession } from '../../utils/session'
+import * as echarts from 'echarts'
 
 const router = useRouter()
 const route = useRoute()
@@ -20,6 +21,11 @@ const orders = ref([])
 const refunds = ref([])
 const activities = ref([])
 const payments = ref([])
+const analyticsOverview = ref(null)
+const adminSuggestions = ref([])
+const suggestionsLoading = ref(false)
+let adminTimer = null
+let adminChartInstances = []
 
 const activityDialog = reactive({ visible: false })
 const activityForm = reactive({
@@ -167,11 +173,134 @@ function logout() {
   router.push('/login')
 }
 
-onMounted(loadAll)
+async function loadAnalytics() {
+  analyticsOverview.value = await api.adminAnalyticsOverview()
+  await nextTick()
+  initAdminCharts()
+}
 
-watch(activeTab, (value) => {
-  router.replace({ query: { ...route.query, tab: value } })
+async function loadAdminSuggestions() {
+  suggestionsLoading.value = true
+  try {
+    adminSuggestions.value = await api.adminAnalyticsSuggestions()
+  } finally {
+    suggestionsLoading.value = false
+  }
+}
+
+function initAdminCharts() {
+  disposeAdminCharts()
+  if (activeTab.value !== 'dashboard') return
+
+  const salesStats = analyticsOverview.value?.salesStats || []
+  const userStats = analyticsOverview.value?.userStats || []
+
+  // Chart 1: Product Sales Quantity
+  const qtyBox = document.getElementById('admin-quantity-chart')
+  if (qtyBox && salesStats.length) {
+    const c1 = echarts.init(qtyBox)
+    c1.setOption({
+      tooltip: { trigger: 'axis' },
+      grid: { left: '3%', right: '8%', bottom: '10%', top: '8%', containLabel: true },
+      xAxis: { type: 'category', data: salesStats.map(r => r.product_name), axisLabel: { rotate: 25, fontSize: 11 } },
+      yAxis: { type: 'value', name: '销售量' },
+      series: [{ type: 'bar', data: salesStats.map(r => r.total_quantity), itemStyle: { color: '#0f766e', borderRadius: [4, 4, 0, 0] }, barMaxWidth: 50 }]
+    })
+    adminChartInstances.push(c1)
+  }
+
+  // Chart 2: Product Sales Amount
+  const amtBox = document.getElementById('admin-amount-chart')
+  if (amtBox && salesStats.length) {
+    const c2 = echarts.init(amtBox)
+    c2.setOption({
+      tooltip: { trigger: 'axis' },
+      grid: { left: '3%', right: '8%', bottom: '10%', top: '8%', containLabel: true },
+      xAxis: { type: 'category', data: salesStats.map(r => r.product_name), axisLabel: { rotate: 25, fontSize: 11 } },
+      yAxis: { type: 'value', name: '销售额（元）' },
+      series: [{ type: 'bar', data: salesStats.map(r => (Number(r.total_amount) || 0).toFixed(2)), itemStyle: { color: '#f97316', borderRadius: [4, 4, 0, 0] }, barMaxWidth: 50 }]
+    })
+    adminChartInstances.push(c2)
+  }
+
+  // Chart 3: User Purchase Amount (horizontal bar)
+  const userBox = document.getElementById('admin-user-chart')
+  if (userBox && userStats.length) {
+    const c3 = echarts.init(userBox)
+    c3.setOption({
+      tooltip: { trigger: 'axis' },
+      grid: { left: '2%', right: '8%', bottom: '6%', top: '6%', containLabel: true },
+      yAxis: { type: 'category', data: userStats.map(r => r.username).reverse(), axisLabel: { fontSize: 12 } },
+      xAxis: { type: 'value', name: '购买额（元）' },
+      series: [{ type: 'bar', data: userStats.map(r => (Number(r.total_amount) || 0).toFixed(2)).reverse(), itemStyle: { color: '#2563eb', borderRadius: [0, 4, 4, 0] }, barMaxWidth: 32 }]
+    })
+    adminChartInstances.push(c3)
+  }
+}
+
+function disposeAdminCharts() {
+  adminChartInstances.forEach(c => c.dispose())
+  adminChartInstances = []
+}
+
+async function updateFreeGroupCount(user, count) {
+  await api.updateUserProfile(user.userId, {
+    username: user.username,
+    password: user.password,
+    phone: user.phone || '',
+    realName: user.realName || '',
+    role: user.role,
+    communityName: user.communityName || '',
+    address: user.address || '',
+    avatarUrl: user.avatarUrl || '',
+    shopName: user.shopName || '',
+    shopAddress: user.shopAddress || '',
+    freeGroupCount: count,
+    status: user.status ?? 1,
+  })
+  notify.success(`已更新 ${user.username} 的免拼次数为 ${count}`)
+}
+
+function startAdminTimer() {
+  stopAdminTimer()
+  adminTimer = setInterval(async () => {
+    if (activeTab.value === 'dashboard') {
+      await loadAnalytics()
+      await loadAdminSuggestions()
+    }
+  }, 30000)
+}
+
+function stopAdminTimer() {
+  if (adminTimer) { clearInterval(adminTimer); adminTimer = null }
+}
+
+onMounted(async () => {
+  await loadAll()
+  if (activeTab.value === 'dashboard') {
+    await loadAnalytics()
+    await loadAdminSuggestions()
+  }
+  startAdminTimer()
 })
+
+onUnmounted(() => {
+  disposeAdminCharts()
+  stopAdminTimer()
+})
+
+watch(activeTab, async (value) => {
+  router.replace({ query: { ...route.query, tab: value } })
+  if (value === 'dashboard') {
+    await nextTick()
+    if (!analyticsOverview.value) await loadAnalytics()
+    else initAdminCharts()
+    if (!adminSuggestions.value.length) await loadAdminSuggestions()
+  } else {
+    disposeAdminCharts()
+  }
+})
+
 </script>
 
 <template>
@@ -182,6 +311,7 @@ watch(activeTab, (value) => {
         <div><h1>管理员工作台</h1></div>
       </div>
       <div class="topbar-actions">
+        <button type="button" class="dashboard-header-btn" @click="activeTab = 'dashboard'">数据大屏</button>
         <el-button type="primary" @click="openActivity()">创建拼团</el-button>
         <el-button @click="logout">退出</el-button>
       </div>
@@ -196,7 +326,52 @@ watch(activeTab, (value) => {
     </section>
 
     <el-tabs v-model="activeTab" class="workspace admin-workspace stretch-tabs">
-      <el-tab-pane label="总览" name="dashboard">
+      <el-tab-pane label="数据大屏" name="dashboard">
+        <div v-if="activeTab === 'dashboard'" class="dashboard-shell">
+          <div class="dashboard-stats">
+            <div class="dashboard-stat-card accent"><span class="stat-label">总交易额</span><span class="stat-value">¥{{ money(analyticsOverview?.overview?.total_revenue || 0) }}</span></div>
+            <div class="dashboard-stat-card"><span class="stat-label">总订单数</span><span class="stat-value">{{ analyticsOverview?.overview?.order_count || 0 }}</span></div>
+            <div class="dashboard-stat-card"><span class="stat-label">付费用户</span><span class="stat-value">{{ analyticsOverview?.overview?.user_count || 0 }} 人</span></div>
+            <div class="dashboard-stat-card"><span class="stat-label">待处理退款</span><span class="stat-value">{{ stats.refunds }}</span></div>
+          </div>
+
+          <div class="dashboard-charts">
+            <div class="dashboard-chart-panel">
+              <h3>全平台商品销售量排行</h3>
+              <div id="admin-quantity-chart" class="dashboard-chart-box"></div>
+            </div>
+            <div class="dashboard-chart-panel">
+              <h3>全平台商品销售额排行</h3>
+              <div id="admin-amount-chart" class="dashboard-chart-box"></div>
+            </div>
+          </div>
+
+          <div class="dashboard-charts full">
+            <div class="dashboard-chart-panel">
+              <h3>用户购买额排行</h3>
+              <div id="admin-user-chart" class="dashboard-chart-box tall"></div>
+            </div>
+          </div>
+
+          <div class="dashboard-suggestions">
+            <h3>智能运营建议</h3>
+            <div v-if="suggestionsLoading" style="color: var(--muted)">正在分析平台数据...</div>
+            <div v-else class="suggestion-list">
+              <div v-for="(s, idx) in adminSuggestions" :key="idx" :class="['suggestion-item', `sug-${idx + 1}`]">
+                <span class="sug-idx">{{ idx + 1 }}</span>
+                <span>{{ s }}</span>
+              </div>
+            </div>
+            <div class="dashboard-actions" style="margin-top: 16px">
+              <el-button type="primary" @click="activeTab = 'notices'">发布促销通知</el-button>
+              <el-button @click="openActivity()">创建拼团活动</el-button>
+              <el-button @click="activeTab = 'refunds'">处理退款</el-button>
+            </div>
+          </div>
+        </div>
+      </el-tab-pane>
+
+      <el-tab-pane label="总览" name="overview">
         <div class="admin-dashboard-grid">
           <section class="mini-panel">
             <h2>最近订单</h2>
@@ -229,7 +404,7 @@ watch(activeTab, (value) => {
           <el-table-column prop="phone" label="电话" min-width="130" />
           <el-table-column prop="communityName" label="社区" min-width="120" />
           <el-table-column prop="shopName" label="店铺" min-width="130" />
-          <el-table-column label="免拼次数" width="100"><template #default="{ row }">{{ row.freeGroupCount ?? '-' }}</template></el-table-column>
+          <el-table-column label="免拼次数" width="160"><template #default="{ row }"><el-input-number v-if="row.role === 'USER'" v-model="row.freeGroupCount" :min="0" :max="99" size="small" controls-position="right" @change="(val) => updateFreeGroupCount(row, val)" /><span v-else style="color: var(--muted)">-</span></template></el-table-column>
           <el-table-column label="状态" width="90"><template #default="{ row }"><el-tag :type="row.status === 1 ? 'success' : 'danger'">{{ row.status === 1 ? '正常' : '禁用' }}</el-tag></template></el-table-column>
           <el-table-column label="操作" width="150"><template #default="{ row }"><el-button v-if="row.status === 1" size="small" type="danger" @click="setUserStatus(row, 0)">禁用</el-button><el-button v-else size="small" type="primary" @click="setUserStatus(row, 1)">启用</el-button></template></el-table-column>
         </el-table>

@@ -41,6 +41,12 @@ const roleOptions = [
   { label: '管理员', value: 'ADMIN' },
 ]
 
+const registerRoleOptions = [
+  { label: '客户', value: 'USER' },
+  { label: '团长', value: 'LEADER' },
+  { label: '商家', value: 'MERCHANT' },
+]
+
 const roleHints = {
   USER: '发现附近好物，拼团下单，到点自提。',
   LEADER: '管理自提点、到货通知和取件核销。',
@@ -193,7 +199,7 @@ onMounted(checkService)
               </el-form-item>
               <el-form-item label="角色">
                 <el-select v-model="registerForm.role">
-                  <el-option v-for="item in roleOptions" :key="item.value" :label="item.label" :value="item.value" />
+                  <el-option v-for="item in registerRoleOptions" :key="item.value" :label="item.label" :value="item.value" />
                 </el-select>
               </el-form-item>
               <el-form-item label="所属社区">

@@ -131,4 +131,24 @@ public interface GroupBuyMapper {
 
     @Select("select now()")
     LocalDateTime now();
+
+    @Select("""
+            select ga.activity_id, ga.product_id, ga.group_price, ga.group_size,
+                   p.product_name, p.main_image,
+                   0 as current_count, ga.group_size as required_count,
+                   1 as is_activity
+            from group_activity ga
+            left join product p on ga.product_id = p.product_id
+            where ga.status = 1
+              and ga.start_time <= now()
+              and ga.end_time >= now()
+              and not exists (
+                select 1 from group_instance gi
+                where gi.activity_id = ga.activity_id
+                  and gi.status = 0
+                  and gi.expire_time > now()
+              )
+            order by ga.create_time desc
+            """)
+    List<Map<String, Object>> findOpenActivities();
 }

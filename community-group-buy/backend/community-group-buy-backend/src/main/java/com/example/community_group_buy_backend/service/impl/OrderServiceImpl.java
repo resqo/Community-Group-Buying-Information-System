@@ -47,8 +47,9 @@ public class OrderServiceImpl implements OrderService {
         int quantity = dto.getQuantity() == null || dto.getQuantity() <= 0 ? 1 : dto.getQuantity();
         BigDecimal price = product.getSinglePrice();
         String orderType = dto.getOrderType() == null ? "SINGLE" : dto.getOrderType();
+        GroupBuy group = null;
         if ("GROUP".equals(orderType) && dto.getGroupId() != null) {
-            GroupBuy group = groupBuyMapper.findInstanceById(dto.getGroupId());
+            group = groupBuyMapper.findInstanceById(dto.getGroupId());
             if (group == null) {
                 throw new IllegalArgumentException("拼团不存在");
             }
@@ -59,12 +60,6 @@ public class OrderServiceImpl implements OrderService {
                     && group.getRequiredCount() != null
                     && group.getCurrentCount() >= group.getRequiredCount()) {
                 throw new IllegalArgumentException("拼团人数已满");
-            }
-            if (group.getLeaderUserId() != null
-                    && group.getLeaderUserId().equals(dto.getUserId())
-                    && group.getCurrentCount() != null
-                    && group.getCurrentCount() > 0) {
-                throw new IllegalArgumentException("不能参与自己发起的拼团");
             }
             GroupBuy activity = groupBuyMapper.findActivityById(group.getActivityId());
             price = activity.getGroupPrice();
@@ -97,8 +92,11 @@ public class OrderServiceImpl implements OrderService {
         order.setOrderStatus("GROUP".equals(orderType) ? 2 : 0);
         orderMapper.insert(order);
         if ("GROUP".equals(orderType) && dto.getGroupId() != null) {
-            if (groupBuyMapper.increaseCount(dto.getGroupId()) == 0) {
-                throw new IllegalArgumentException("拼团人数已满");
+            boolean isLeader = group != null && group.getLeaderUserId() != null && group.getLeaderUserId().equals(dto.getUserId());
+            if (!isLeader) {
+                if (groupBuyMapper.increaseCount(dto.getGroupId()) == 0) {
+                    throw new IllegalArgumentException("拼团人数已满");
+                }
             }
             groupBuyMapper.markSuccessIfFull(dto.getGroupId());
             notifyGroupIfFull(dto.getGroupId());
